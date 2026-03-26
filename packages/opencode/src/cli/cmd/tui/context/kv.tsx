@@ -1,25 +1,24 @@
-import { Global } from "@/global"
-import { Filesystem } from "@/util/filesystem"
+import { ClientDatabase } from "@/storage/client-db"
+import { ClientKVTable } from "@/storage/client-db.schema"
+import { eq } from "drizzle-orm"
 import { createSignal, type Setter } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createSimpleContext } from "./helper"
-import path from "path"
 
 export const { use: useKV, provider: KVProvider } = createSimpleContext({
   name: "KV",
   init: () => {
     const [ready, setReady] = createSignal(false)
     const [store, setStore] = createStore<Record<string, any>>()
-    const filePath = path.join(Global.Path.state, "kv.json")
 
-    Filesystem.readJson(filePath)
-      .then((x) => {
-        setStore(x)
-      })
-      .catch(() => {})
-      .finally(() => {
-        setReady(true)
-      })
+    setStore(
+      Object.fromEntries(
+        ClientDatabase.use((db) =>
+          db.select({ key: ClientKVTable.key, value: ClientKVTable.value }).from(ClientKVTable).all(),
+        ).map((row) => [row.key, row.value]),
+      ),
+    )
+    setReady(true)
 
     const result = {
       get ready() {
@@ -44,7 +43,27 @@ export const { use: useKV, provider: KVProvider } = createSimpleContext({
       },
       set(key: string, value: any) {
         setStore(key, value)
-        Filesystem.writeJson(filePath, store)
+        ClientDatabase.transaction((db) => {
+          if (store[key] === undefined) {
+            db.delete(ClientKVTable).where(eq(ClientKVTable.key, key)).run()
+            return
+          }
+
+          db.insert(ClientKVTable)
+            .values({
+              key,
+              value: store[key],
+              time_updated: Date.now(),
+            })
+            .onConflictDoUpdate({
+              target: ClientKVTable.key,
+              set: {
+                value: store[key],
+                time_updated: Date.now(),
+              },
+            })
+            .run()
+        })
       },
     }
     return result

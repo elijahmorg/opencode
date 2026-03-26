@@ -1,10 +1,9 @@
-import path from "path"
-import { Global } from "@/global"
-import { Filesystem } from "@/util/filesystem"
+import { ClientDatabase } from "@/storage/client-db"
+import { ClientPromptHistoryTable } from "@/storage/client-db.schema"
+import { desc, sql } from "drizzle-orm"
 import { onMount } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { createSimpleContext } from "../../context/helper"
-import { appendFile, writeFile } from "fs/promises"
 import type { AgentPart, FilePart, TextPart } from "@opencode-ai/sdk/v2"
 
 export type PromptInfo = {
@@ -30,29 +29,23 @@ const MAX_HISTORY_ENTRIES = 50
 export const { use: usePromptHistory, provider: PromptHistoryProvider } = createSimpleContext({
   name: "PromptHistory",
   init: () => {
-    const historyPath = path.join(Global.Path.state, "prompt-history.jsonl")
-    onMount(async () => {
-      const text = await Filesystem.readText(historyPath).catch(() => "")
-      const lines = text
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => {
-          try {
-            return JSON.parse(line)
-          } catch {
-            return null
-          }
-        })
-        .filter((line): line is PromptInfo => line !== null)
-        .slice(-MAX_HISTORY_ENTRIES)
-
-      setStore("history", lines)
-
-      // Rewrite file with only valid entries to self-heal corruption
-      if (lines.length > 0) {
-        const content = lines.map((line) => JSON.stringify(line)).join("\n") + "\n"
-        writeFile(historyPath, content).catch(() => {})
-      }
+    onMount(() => {
+      setStore(
+        "history",
+        ClientDatabase.use((db) =>
+          db
+            .select({ data: ClientPromptHistoryTable.data })
+            .from(ClientPromptHistoryTable)
+            .orderBy(desc(ClientPromptHistoryTable.id))
+            .limit(MAX_HISTORY_ENTRIES)
+            .all(),
+        )
+          .reverse()
+          .map((row) => row.data)
+          .filter(
+            (line): line is PromptInfo => !!line && typeof line === "object" && "input" in line && "parts" in line,
+          ),
+      )
     })
 
     const [store, setStore] = createStore({
@@ -83,25 +76,27 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
       },
       append(item: PromptInfo) {
         const entry = structuredClone(unwrap(item))
-        let trimmed = false
         setStore(
           produce((draft) => {
             draft.history.push(entry)
             if (draft.history.length > MAX_HISTORY_ENTRIES) {
               draft.history = draft.history.slice(-MAX_HISTORY_ENTRIES)
-              trimmed = true
             }
             draft.index = 0
           }),
         )
+        ClientDatabase.transaction((db) => {
+          db.insert(ClientPromptHistoryTable)
+            .values({
+              data: entry,
+              time_created: Date.now(),
+            })
+            .run()
 
-        if (trimmed) {
-          const content = store.history.map((line) => JSON.stringify(line)).join("\n") + "\n"
-          writeFile(historyPath, content).catch(() => {})
-          return
-        }
-
-        appendFile(historyPath, JSON.stringify(entry) + "\n").catch(() => {})
+          db.run(sql`DELETE FROM client_prompt_history WHERE id NOT IN (
+            SELECT id FROM client_prompt_history ORDER BY id DESC LIMIT ${MAX_HISTORY_ENTRIES}
+          )`)
+        })
       },
     }
   },
