@@ -1,6 +1,9 @@
-import { ClientDatabase } from "@/storage/client-db"
+import { ClientDatabase } from "@/storage/db"
 import { ClientPromptHistoryTable } from "@/storage/client-db.schema"
+import { Global } from "@/global"
 import { desc, sql } from "drizzle-orm"
+import { existsSync, readFileSync } from "fs"
+import path from "path"
 import { onMount } from "solid-js"
 import { createStore, produce, unwrap } from "solid-js/store"
 import { createSimpleContext } from "../../context/helper"
@@ -26,10 +29,41 @@ export type PromptInfo = {
 
 const MAX_HISTORY_ENTRIES = 50
 
+function parse(text: string) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    return undefined
+  }
+}
+
 export const { use: usePromptHistory, provider: PromptHistoryProvider } = createSimpleContext({
   name: "PromptHistory",
   init: () => {
+    const file = path.join(Global.Path.state, "prompt-history.jsonl")
+
     onMount(() => {
+      ClientDatabase.transaction((db) => {
+        const row = db.select({ id: ClientPromptHistoryTable.id }).from(ClientPromptHistoryTable).limit(1).get()
+        if (row) return
+        if (!existsSync(file)) return
+
+        const now = Date.now()
+        const rows = readFileSync(file, "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map(parse)
+          .filter((item): item is PromptInfo => item !== undefined)
+          .slice(-MAX_HISTORY_ENTRIES)
+          .map((data) => ({
+            data,
+            time_created: now,
+          }))
+
+        if (rows.length === 0) return
+        db.insert(ClientPromptHistoryTable).values(rows).run()
+      })
+
       setStore(
         "history",
         ClientDatabase.use((db) =>
@@ -41,10 +75,7 @@ export const { use: usePromptHistory, provider: PromptHistoryProvider } = create
             .all(),
         )
           .reverse()
-          .map((row) => row.data)
-          .filter(
-            (line): line is PromptInfo => !!line && typeof line === "object" && "input" in line && "parts" in line,
-          ),
+          .map((row) => row.data as PromptInfo),
       )
     })
 

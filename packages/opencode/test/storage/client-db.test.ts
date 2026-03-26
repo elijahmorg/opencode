@@ -3,7 +3,7 @@ import { rm } from "fs/promises"
 import path from "path"
 import { desc, eq, sql } from "drizzle-orm"
 import { Global } from "../../src/global"
-import { ClientDatabase } from "../../src/storage/client-db"
+import { ClientDatabase } from "../../src/storage/db"
 import { ClientKVTable, ClientPromptHistoryTable } from "../../src/storage/client-db.schema"
 
 async function clear() {
@@ -84,7 +84,7 @@ describe("ClientDatabase", () => {
     await clear()
   })
 
-  test("imports legacy files once", async () => {
+  test("does not import legacy files in db layer", async () => {
     await Bun.write(path.join(Global.Path.state, "kv.json"), JSON.stringify({ alpha: 1, beta: "x" }))
     await Bun.write(
       path.join(Global.Path.state, "prompt-history.jsonl"),
@@ -92,27 +92,11 @@ describe("ClientDatabase", () => {
     )
 
     const first = kv()
-    expect(first.alpha).toBe(1)
-    expect(first.beta).toBe("x")
+    expect(first.alpha).toBeUndefined()
+    expect(first.beta).toBeUndefined()
 
     const prompts = prompt(50)
-    expect(prompts.length).toBe(2)
-    expect(prompts[0].input).toBe("one")
-    expect(prompts[1].input).toBe("two")
-
-    ClientDatabase.close()
-
-    await Bun.write(path.join(Global.Path.state, "kv.json"), JSON.stringify({ gamma: 3 }))
-    await Bun.write(
-      path.join(Global.Path.state, "prompt-history.jsonl"),
-      `${JSON.stringify({ input: "three", parts: [] })}\n`,
-    )
-
-    const second = kv()
-    expect(second.gamma).toBeUndefined()
-
-    const prompts2 = prompt(50)
-    expect(prompts2.length).toBe(2)
+    expect(prompts.length).toBe(0)
   })
 
   test("keeps prompt history capped", () => {

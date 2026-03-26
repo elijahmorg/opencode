@@ -10,8 +10,7 @@ import { afterAll } from "bun:test"
 const dir = path.join(os.tmpdir(), "opencode-test-data-" + process.pid)
 await fs.mkdir(dir, { recursive: true })
 afterAll(async () => {
-  const { Database } = await import("../src/storage/db")
-  const { ClientDatabase } = await import("../src/storage/client-db")
+  const { Database, ClientDatabase } = await import("../src/storage/db")
   Database.close()
   ClientDatabase.close()
   const busy = (error: unknown) =>
