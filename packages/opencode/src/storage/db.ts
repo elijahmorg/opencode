@@ -26,7 +26,6 @@ export const NotFoundError = NamedError.create(
 )
 
 type Journal = { sql: string; timestamp: number; name: string }[]
-type EffectFn = () => void | Promise<void>
 type Client = SQLiteBunDatabase
 type Transaction = SQLiteTransaction<"sync", void>
 type TxOrDb = Transaction | Client
@@ -45,7 +44,7 @@ function time(tag: string) {
   )
 }
 
-function journal(dir: string): Journal {
+function migrations(dir: string): Journal {
   const dirs = readdirSync(dir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -77,7 +76,7 @@ function make(input: {
   const log = Log.create({ service: input.service })
   const ctx = Context.create<{
     tx: TxOrDb
-    effects: EffectFn[]
+    effects: (() => void | Promise<void>)[]
   }>(input.context)
 
   const Client = lazy(() => {
@@ -119,9 +118,8 @@ function make(input: {
       return callback(ctx.use().tx)
     } catch (err) {
       if (err instanceof Context.NotFound) {
-        const db = Client()
-        const effects: EffectFn[] = []
-        const result = ctx.provide({ effects, tx: db }, () => callback(db))
+        const effects: (() => void | Promise<void>)[] = []
+        const result = ctx.provide({ effects, tx: Client() }, () => callback(Client()))
         for (const effect of effects) effect()
         return result
       }
@@ -129,7 +127,7 @@ function make(input: {
     }
   }
 
-  function effect(fn: EffectFn) {
+  function effect(fn: () => any | Promise<any>) {
     try {
       ctx.use().effects.push(fn)
     } catch {
@@ -147,7 +145,7 @@ function make(input: {
       return callback(ctx.use().tx)
     } catch (err) {
       if (err instanceof Context.NotFound) {
-        const effects: EffectFn[] = []
+        const effects: (() => void | Promise<void>)[] = []
         const result = Client().transaction(
           (tx: TxOrDb) => {
             return ctx.provide({ tx, effects }, () => callback(tx))
@@ -199,7 +197,7 @@ export namespace Database {
         }
       }
       return {
-        entries: journal(path.join(import.meta.dirname, "../../migration")),
+        entries: migrations(path.join(import.meta.dirname, "../../migration")),
         mode: "dev" as const,
       }
     },
@@ -230,7 +228,7 @@ export namespace ClientDatabase {
         }
       }
       return {
-        entries: journal(path.join(import.meta.dirname, "../../client-migration")),
+        entries: migrations(path.join(import.meta.dirname, "../../client-migration")),
         mode: "dev" as const,
       }
     },
